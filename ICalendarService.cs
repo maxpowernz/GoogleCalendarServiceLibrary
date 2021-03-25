@@ -5,8 +5,6 @@ using Google.Apis.Calendar.v3;
 using Google.Apis.Calendar.v3.Data;
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 
 namespace CalendarServices
 {
@@ -16,10 +14,8 @@ namespace CalendarServices
         IList<Event> GetEvents(DateTime eventStartDate, DateTime eventEndDate);
         IList<TimeSlot> BuildCalendar(DateTime startDate, DateTime endDate, IList<Event> calendarEvents, double interval = 15);
         IList<TimeSlot> GetAvailableTimes(IList<TimeSlot> workShift, int serviceDuration);
-        //IEnumerable<TimePeriod> GetBookedDays(DateTime timeMin, DateTime timeMax, string calendarId, List<WorkDay> workDays);
-        IEnumerable<DateTime> GetBookedOutDays(DateTime timeMin, DateTime timeMax, List<WorkDay> workDays, TimeSpan interval);
-        IEnumerable<TimePeriod> GetFreeTimeSlots(IEnumerable<IGrouping<DateTime, Event>> eventsGroup, List<WorkDay> workDays, TimeSpan interval, DateTime timeMin, DateTime timeMax);
-
+        IEnumerable<DateTime> GetBookedOutDays(List<WorkDayDto> workDays, DateTime timeMin, DateTime timeMax, TimeSpan interval);
+        IEnumerable<TimePeriod> GetFreeTimeSlots(List<WorkDayDto> workDays, DateTime timeMin, DateTime timeMax);
 
         IList<object> CalendarDebug { get; set; }
 

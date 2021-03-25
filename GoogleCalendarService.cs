@@ -10,7 +10,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using static Google.Apis.Http.ConfigurableMessageHandler;
 
 namespace CalendarServices.GoogleCalendar
@@ -311,114 +310,72 @@ namespace CalendarServices.GoogleCalendar
         /// <param name="workDays"></param>
         /// <param name="interval"></param>
         /// <returns></returns>
-        public IEnumerable<DateTime> GetBookedOutDays(DateTime timeMin, DateTime timeMax, List<WorkDay> workDays, TimeSpan interval)
+        public IEnumerable<DateTime> GetBookedOutDays(List<WorkDayDto> workDays, DateTime timeMin, DateTime timeMax, TimeSpan interval)
         {
 
             List<DateTime> BookedOutDays = new List<DateTime>(0);
 
-            var nonWorkDays = workDays.Where(d => d.IsNonWorkingDay).ToList();
+            var freeTimeSlots = GetFreeTimeSlots(workDays, timeMin, timeMax);
+            var freeTimeSlotsGrouped = freeTimeSlots.GroupBy(d => (d.Start.Value.Year, d.Start.Value.Month, d.Start.Value.Day));
 
-            var request = new EventsResource.ListRequest(_calendarService, Options.CalendarId)
+            string zoneId = Options.CalendarTimeZone;
+            TimeZoneInfo timeZone = TimeZoneInfo.FindSystemTimeZoneById(zoneId);
+
+            var localTime = TimeZoneInfo.ConvertTime(DateTime.Now, timeZone);
+            timeMin = new DateTime(localTime.Year, localTime.Month, localTime.Day);
+
+
+            if (DateTime.Now.ToShortDateString() != timeMin.ToShortDateString())
             {
-                TimeMin = timeMin,
-                TimeMax = timeMax,
-                TimeZone = "New Zealand Standard"
-
-            };
-
-            var result = request.Execute();
-
-            //select all day events, they return null as datetime
-            var nonFilteredEvents = result.Items
-                .Where(d => d.Start.DateTime == null)
-                .Select(d => DateTime.Parse(d.Start.Date));
-
-            //filter out non working days
-            var allDayEvents = nonFilteredEvents
-                .Where(d => d.DayOfWeek != nonWorkDays.Find(e => e.DayOfWeek == d.DayOfWeek)?.DayOfWeek);
-                            
-
-            BookedOutDays.AddRange(allDayEvents);
+                BookedOutDays.Add(DateTime.Now);
+            }
 
 
-            //group the events by year, month, day
-            var eventsGroup = result.Items.Where(d => d.Start.DateTime != null)
-                .GroupBy(t => new DateTime(t.Start.DateTime.Value.Year, t.Start.DateTime.Value.Month, t.Start.DateTime.Value.Day))
-                .OrderBy(t => (t.Key.Year, t.Key.Month, t.Key.Day));
-
-
-            //if there is only one event for the day check if it spans the whole day
-            var singleEvents = eventsGroup.Where(g => g.Count() == 1).Select(g => new Event
+            //check time slot interval, if there is none greater than interval then add to list
+            foreach (var freeTimeSlotsGroup in freeTimeSlotsGrouped)
             {
-                Start = g.FirstOrDefault().Start,
-                End = g.FirstOrDefault().End
-            });
-
-
-            foreach (var singleEvent in singleEvents)
-            {
-                var currentDay = singleEvent.Start.DateTime.Value;
-                var currentDayOfWeek = currentDay.DayOfWeek;
-                var workDay = workDays.FirstOrDefault(d => d.DayOfWeek == currentDayOfWeek);
-                var nonWorkDay = workDays.SingleOrDefault(d => d.DayOfWeek == currentDayOfWeek).IsNonWorkingDay;
-
-                if (nonWorkDay) continue;
-
-                var workDayStartTime = new DateTime(currentDay.Year, currentDay.Month, currentDay.Day) + workDay.StartTime;
-                var workDayEndTime = new DateTime(currentDay.Year, currentDay.Month, currentDay.Day) + workDay.EndTime;
-
-                if (allDayEvents.Any(d => d.Date == currentDay.Date))
+                if (!freeTimeSlotsGroup.Any(d => d.End - d.Start >= interval))
                 {
-                    continue;
-                }
-
-                //this will be an event that lasts all day
-                if (singleEvent.Start.DateTime.Value.Hour <= workDayStartTime.Hour && singleEvent.End.DateTime.Value.Hour >= workDayEndTime.Hour)
-                {
-                   BookedOutDays.Add((DateTime)singleEvent.Start.DateTime);              
+                    BookedOutDays.Add(freeTimeSlotsGroup.FirstOrDefault().Start.Value);
                 }
             }
 
 
-            var freeTimeSlots = GetFreeTimeSlots(eventsGroup, workDays, interval, timeMin, timeMax);
+            var firstDayEndTime = new DateTime(timeMin.Year, timeMin.Month, timeMin.Day) + workDays.Single(d => d.DayOfWeek == timeMin.DayOfWeek).EndTime;
+            var firstDayHourOffset = TimeZoneInfo.ConvertTime(DateTime.Now.AddHours(Options.SameDayHourOffset), timeZone);
+            //var firstDayHourOffset = TimeZoneInfo.ConvertTime(new DateTime(2021, 1, 12, 17, 0, 0), timeZone);
+            //var firstDayHourOffset = new DateTime(2021, 1, 9, 16, 0, 0);
+
+            // if no slots left greater than datetime offset book out day
+            var firstDayFreeSlots = freeTimeSlots.Any(d => d.Start.Value.ToShortDateString() == timeMin.ToShortDateString()
+                                        && d.End >= firstDayHourOffset
+                                        && d.End - d.Start >= interval);
 
 
-            //bool noFreeTimePeriods = false;
-            //check to see if selected interval is available
-
-            var x = freeTimeSlots.Where(t => t.End - t.Start < interval);
-
-            foreach(var t in x) 
+            if (!firstDayFreeSlots)
             {
-                Debug.WriteLine($"{t.Start} {t.End}");
+                BookedOutDays.Add(timeMin);
             }
 
 
-            //foreach (var freeTime in freeTimePeriods)
-            //{
-            //    if (freeTime.End - freeTime.Start < interval)
-            //    {
-            //        noFreeTimePeriods = true;
-            //    }
-            //    else
-            //    {
-            //        noFreeTimePeriods = false;
-            //    }
-            //}
+            //loop through days and add days that are not in freetime slots to list
+            while (timeMax >= timeMin)
+            {
 
-            //if (noFreeTimePeriods == true)
-            //{
-            //    //BookedOutDays.Add(new TimePeriod { Start = currentDay });
-            //}
+                if (!freeTimeSlots.Any(d => d.Start?.ToShortDateString() == timeMin.ToShortDateString()))
+                {
+                    BookedOutDays.Add(timeMin);
+                }
 
+                timeMin = timeMin.AddDays(1);
+            }
 
-
-            return BookedOutDays.OrderBy(d => d);
+            return BookedOutDays.OrderBy(d => d).ToList();
         }
 
 
         /// <summary>
-        /// Get free time slots, can either provide an events group or null to make a new request
+        /// Get free time slots
         /// </summary>
         /// <param name="eventsGroup"></param>
         /// <param name="workDays"></param>
@@ -426,51 +383,83 @@ namespace CalendarServices.GoogleCalendar
         /// <param name="timeMin"></param>
         /// <param name="timeMax"></param>
         /// <returns></returns>
-        public IEnumerable<TimePeriod> GetFreeTimeSlots(IEnumerable<IGrouping<DateTime, Event>> eventsGroup, List<WorkDay> workDays, TimeSpan interval, DateTime timeMin, DateTime timeMax)
+        public IEnumerable<TimePeriod> GetFreeTimeSlots(List<WorkDayDto> workDays, DateTime timeMin, DateTime timeMax)
         {
 
+            string zoneId = Options.CalendarTimeZone;
+            TimeZoneInfo timeZone = TimeZoneInfo.FindSystemTimeZoneById(zoneId);
+
+            var firstDate = TimeZoneInfo.ConvertTime(timeMin, timeZone);
+
+
             var freeTimeSlots = new List<TimePeriod>(0);
-            IEnumerable<DateTime> allDayEvents = new List<DateTime>(0);
 
-            //make new request if null events group passed in as param
-            if (eventsGroup == null)
+            var request = new EventsResource.ListRequest(_calendarService, Options.CalendarId)
+            {
+                TimeMin = timeMin,
+                TimeMax = timeMax,
+                ShowDeleted = false,
+                SingleEvents = true,
+                MaxResults = 2500
+            };
+
+            var result = request.Execute();
+
+
+            //important, convert start and end to calendar time zone
+            var eventsGroup = result.Items.Where(d => d.Start.DateTime != null)
+                            .OrderBy(t => (t.Start.DateTime, t.End.DateTime))
+                            .Select(e => new Event
+                            {
+                                Id = e.Id,
+                                Start = new EventDateTime { DateTime = TimeZoneInfo.ConvertTime(e.Start.DateTime.Value, timeZone) },
+                                End = new EventDateTime { DateTime = TimeZoneInfo.ConvertTime(e.End.DateTime.Value, timeZone) }
+                            })
+                            .GroupBy(t => new DateTime(t.Start.DateTime.Value.Year, t.Start.DateTime.Value.Month, t.Start.DateTime.Value.Day)).ToList();
+
+
+            var allDayEvents = result.Items
+                                      .Where(d => d.Start.DateTime == null)
+                                      .Select(d => new Event
+                                      {
+                                          Start = new EventDateTime()
+                                          {
+                                              DateTime = DateTime.Parse(d.Start.Date)
+                                          },
+                                          End = new EventDateTime()
+                                          {
+                                              DateTime = DateTime.Parse(d.End.Date)
+                                          }
+                                      });
+
+
+            var allDayEventsStart = allDayEvents.FirstOrDefault()?.Start.DateTime.Value;
+            var allDayEventsEnd = allDayEvents.FirstOrDefault()?.End.DateTime.Value;
+
+            //flatten list to save repeated query
+            var eventsFlattened = eventsGroup.SelectMany(g => g).ToList();
+
+
+            // get days that have no events, exclude all day events and add to list
+            // TESTED OK
+            while (timeMax > timeMin)
             {
 
-                var request = new EventsResource.ListRequest(_calendarService, Options.CalendarId)
-                {
-                    TimeMin = timeMin,
-                    TimeMax = timeMax,
-                    TimeZone = "New Zealand Standard"
+                // continue on all day events, reset time to 12am
+                var timeMin12Am = timeMin + new TimeSpan(0, 0, 0);
 
-                };
-
-                var result = request.Execute();
-
-                eventsGroup = result.Items.Where(d => d.Start.DateTime != null)
-                                    .OrderBy(t => (t.Start.DateTime))
-                                    .GroupBy(t => new DateTime(t.Start.DateTime.Value.Year, t.Start.DateTime.Value.Month, t.Start.DateTime.Value.Day));
-
-                allDayEvents = result.Items.Where(d => d.Start.DateTime == null).Select(d => DateTime.Parse(d.Start.Date)).ToList();
-            }
-
-
-            // get days that have no events and add them to the list
-            // need to check all day events as well and exclude them
-            var eventsList = eventsGroup.SelectMany(e => e).ToList();
-
-            while (timeMax >= timeMin)
-            {
-
-                //if current date is all day event continue
-                if (allDayEvents.Any(d => d.ToShortDateString() == timeMin.ToShortDateString()))
+                if (timeMin12Am >= allDayEventsStart && timeMin12Am <= allDayEventsEnd)
                 {
                     timeMin = timeMin.AddDays(1);
                     continue;
-                };
+                }
 
-                var isDayInEventList = eventsList.Any(d => d.Start.DateTime.Value.ToShortDateString() == timeMin.ToShortDateString());
+                // if day has no events then it is free
+                var dayHasEvents = eventsFlattened.Any(d => d.Start.DateTime.Value.ToShortDateString() == timeMin.ToShortDateString());
 
-                if (!isDayInEventList)
+                //&& timeMin.ToShortDateString() != firstDate.ToShortDateString()
+
+                if (!dayHasEvents)
                 {
 
                     if (workDays.Any(d => d.DayOfWeek == timeMin.DayOfWeek && d.IsNonWorkingDay == false))
@@ -491,59 +480,109 @@ namespace CalendarServices.GoogleCalendar
             }
 
 
-            //get free slots 
+
             foreach (IGrouping<DateTime, Event> events in eventsGroup)
             {
 
                 var dayOfWeek = events.Key.DayOfWeek;
-                var currentDay = events.FirstOrDefault().Start.DateTime.Value;
-                var currentDayOfWeek = currentDay.DayOfWeek;
-                var nonWorkDay = workDays.FirstOrDefault(d => d.DayOfWeek == currentDayOfWeek)?.IsNonWorkingDay ?? true;
+                var currentDay = events.Key;
+                var nonWorkDay = workDays.FirstOrDefault(d => d.DayOfWeek == dayOfWeek)?.IsNonWorkingDay ?? true;
 
                 if (nonWorkDay) continue;
 
-                var workDayEndTime = new DateTime(currentDay.Year, currentDay.Month, currentDay.Day) + workDays.FirstOrDefault(d => d.DayOfWeek == dayOfWeek).EndTime;
                 var workDayStartTime = new DateTime(currentDay.Year, currentDay.Month, currentDay.Day) + workDays.FirstOrDefault(d => d.DayOfWeek == dayOfWeek).StartTime;
+                var workDayEndTime = new DateTime(currentDay.Year, currentDay.Month, currentDay.Day) + workDays.FirstOrDefault(d => d.DayOfWeek == dayOfWeek).EndTime;
 
-                //add slot if first event starttime is greater than workday starttime
-                var firstTimeSlot = events.FirstOrDefault(e => events.FirstOrDefault().Start.DateTime.Value > workDayStartTime);
 
-                if (firstTimeSlot != null)
+                // check to see if an event spans entire work day, if it doesnt continue loop
+                var eventSpansWholeDay = events.FirstOrDefault(e => e.Start.DateTime <= workDayStartTime && e.End.DateTime >= workDayEndTime);
+
+                if (eventSpansWholeDay != null)
+                {
+                    continue;
+                }
+
+
+                // filter events based on the current work day
+                var filteredEvents = events.Where(e => e.End.DateTime >= workDayStartTime && e.Start.DateTime < workDayEndTime);
+                var firstEventStart = filteredEvents.FirstOrDefault()?.Start.DateTime;
+                var firstEventEnd = filteredEvents.FirstOrDefault()?.End.DateTime;
+
+                // if the filtered events has none then the day is free
+                if (!filteredEvents.Any())
                 {
                     freeTimeSlots.Add(new TimePeriod
                     {
                         Start = workDayStartTime,
-                        End = firstTimeSlot.Start.DateTime > workDayEndTime ? workDayEndTime : firstTimeSlot.Start.DateTime
-                    });
-                }
-
-
-                ////select all the other free time slots
-                var timeSlots = events
-                            .Where(e => e.Start.DateTime.Value.Hour < workDayEndTime.Hour)
-                            .Select((time, index) => new TimePeriod
-                            {
-                                Start = time.End.DateTime,
-                                End = events.Skip(index + 1).FirstOrDefault()?.Start.DateTime.Value ?? workDayEndTime
-                            }).Where(t => t.Start != t.End);
-
-
-                if (timeSlots.LastOrDefault()?.End.Value.Hour > workDayEndTime.Hour)
-                {
-                    freeTimeSlots.Add(new TimePeriod
-                    {
-                        Start = timeSlots.Last().Start.Value,
                         End = workDayEndTime
                     });
                 }
-                else
+
+
+                //if all day event continue to next lot of events
+                if (allDayEvents.Any(d => d.Start.DateTime.Value.ToShortDateString() == firstEventStart?.ToShortDateString()))
                 {
-                    freeTimeSlots.AddRange(timeSlots);
+                    continue;
+                };
+
+
+                // add first slot if first event time is greater than start time
+                if (firstEventStart > workDayStartTime && firstEventStart > firstDate)
+                {
+                    freeTimeSlots.Add(new TimePeriod
+                    {
+                        Start = workDayStartTime,
+                        End = firstEventStart
+                    });
                 }
 
+
+                // add the rest of the slots
+                int x = 1;
+
+                foreach (var calEvent in filteredEvents)
+                {
+                    var eventStart = calEvent.Start.DateTime;
+                    var eventEnd = calEvent.End.DateTime;
+
+
+                    var nextEventStart = filteredEvents.Skip(x).FirstOrDefault()?.Start.DateTime;
+                    var nextEventEnd = filteredEvents.Skip(x).FirstOrDefault()?.End.DateTime;
+
+                    //check to see if any events are nested inside another one
+                    var eventIsNested = filteredEvents.FirstOrDefault(t => t.Start.DateTime < eventStart && t.End.DateTime > eventEnd);
+
+                    if (eventIsNested != null)
+                    {
+                        eventEnd = eventIsNested.End.DateTime;
+                    }
+
+                    if (eventEnd != nextEventStart && eventEnd < nextEventStart)
+                    {
+                        freeTimeSlots.Add(new TimePeriod
+                        {
+                            Start = eventEnd,
+                            End = nextEventStart > workDayEndTime ? workDayEndTime : nextEventStart
+                        });
+                    }
+
+
+                    // must be the last event
+                    if (nextEventEnd == null && eventEnd < workDayEndTime)
+                    {
+
+                        freeTimeSlots.Add(new TimePeriod
+                        {
+                            Start = eventEnd,
+                            End = workDayEndTime
+                        });
+                    }
+
+                    x++;
+                }
             }
 
-            return freeTimeSlots.OrderBy(d => d.Start);
+            return freeTimeSlots.OrderBy(d => d.Start).ToList();
         }
     }
 }
