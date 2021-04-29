@@ -321,14 +321,14 @@ namespace CalendarServices.GoogleCalendar
             string zoneId = Options.CalendarTimeZone;
             TimeZoneInfo timeZone = TimeZoneInfo.FindSystemTimeZoneById(zoneId);
 
-            var localTime = TimeZoneInfo.ConvertTime(DateTime.Now, timeZone);
+            var localTime = TimeZoneInfo.ConvertTime(timeMin, timeZone);
             timeMin = new DateTime(localTime.Year, localTime.Month, localTime.Day);
 
 
-            if (DateTime.Now.ToShortDateString() != timeMin.ToShortDateString())
-            {
-                BookedOutDays.Add(DateTime.Now);
-            }
+            //if (DateTime.Now.ToShortDateString() != timeMin.ToShortDateString())
+            //{
+            //    BookedOutDays.Add(DateTime.Now);
+            //}
 
 
             //check time slot interval, if there is none greater than interval then add to list
@@ -342,9 +342,7 @@ namespace CalendarServices.GoogleCalendar
 
 
             var firstDayEndTime = new DateTime(timeMin.Year, timeMin.Month, timeMin.Day) + workDays.Single(d => d.DayOfWeek == timeMin.DayOfWeek).EndTime;
-            var firstDayHourOffset = TimeZoneInfo.ConvertTime(DateTime.Now.AddHours(Options.SameDayHourOffset), timeZone);
-            //var firstDayHourOffset = TimeZoneInfo.ConvertTime(new DateTime(2021, 1, 12, 17, 0, 0), timeZone);
-            //var firstDayHourOffset = new DateTime(2021, 1, 9, 16, 0, 0);
+            var firstDayHourOffset = TimeZoneInfo.ConvertTime(timeMin.AddHours(Options.SameDayHourOffset), timeZone);
 
             // if no slots left greater than datetime offset book out day
             var firstDayFreeSlots = freeTimeSlots.Any(d => d.Start.Value.ToShortDateString() == timeMin.ToShortDateString()
@@ -362,7 +360,7 @@ namespace CalendarServices.GoogleCalendar
             while (timeMax >= timeMin)
             {
 
-                if (!freeTimeSlots.Any(d => d.Start?.ToShortDateString() == timeMin.ToShortDateString()))
+                if (!freeTimeSlots.Any(d => d.Start?.ToShortDateString() == timeMin.ToShortDateString()) && !BookedOutDays.Contains(timeMin))
                 {
                     BookedOutDays.Add(timeMin);
                 }
@@ -388,7 +386,6 @@ namespace CalendarServices.GoogleCalendar
 
             string zoneId = Options.CalendarTimeZone;
             TimeZoneInfo timeZone = TimeZoneInfo.FindSystemTimeZoneById(zoneId);
-
             var firstDate = TimeZoneInfo.ConvertTime(timeMin, timeZone);
 
             var freeTimeSlots = new List<TimePeriod>(0);
@@ -439,40 +436,21 @@ namespace CalendarServices.GoogleCalendar
             var eventsFlattened = eventsGroup.SelectMany(g => g).ToList();
 
 
-            // get days that have no events, exclude all day events and add to list
-            // TESTED BAD
+            // get days that have no events
             while (timeMax > timeMin)
             {
 
-                // continue on all day events, reset time to 12am
-                //var timeMin12Am = timeMin + new TimeSpan(0, 0, 0);
-
-                //if (allDayEvents.Any(e => e.Start.DateTime.Value <= timeMin12Am) && allDayEvents.Any(e => e.End.DateTime.Value >= timeMin12Am))
-                //{
-                //    timeMin = timeMin.AddDays(1);
-                //    continue;
-                //}
-
-                //if (timeMin12Am >= allDayEventsStart && timeMin12Am <= allDayEventsEnd)
-                //{
-                //    timeMin = timeMin.AddDays(1);
-                //    continue;
-                //}
-
                 // if day has no events then it is free
                 var dayHasEvents = eventsFlattened.Any(d => d.Start.DateTime.Value.ToShortDateString() == timeMin.ToShortDateString());
+                var dayOfWeek = timeMin.DayOfWeek;
+                var startTime = new DateTime(timeMin.Year, timeMin.Month, timeMin.Day) + workDays.Single(d => d.DayOfWeek == dayOfWeek).StartTime;
+                var endTime = new DateTime(timeMin.Year, timeMin.Month, timeMin.Day) + workDays.Single(d => d.DayOfWeek == dayOfWeek).EndTime;
 
-                //&& timeMin.ToShortDateString() != firstDate.ToShortDateString()
 
-                if (!dayHasEvents)
+                if (!dayHasEvents && firstDate < endTime)
                 {
-
                     if (workDays.Any(d => d.DayOfWeek == timeMin.DayOfWeek && d.IsNonWorkingDay == false))
                     {
-                        var dayOfWeek = timeMin.DayOfWeek;
-                        var startTime = new DateTime(timeMin.Year, timeMin.Month, timeMin.Day) + workDays.Single(d => d.DayOfWeek == dayOfWeek).StartTime;
-                        var endTime = new DateTime(timeMin.Year, timeMin.Month, timeMin.Day) + workDays.Single(d => d.DayOfWeek == dayOfWeek).EndTime;
-
                         freeTimeSlots.Add(new TimePeriod
                         {
                             Start = startTime,
@@ -485,6 +463,7 @@ namespace CalendarServices.GoogleCalendar
             }
 
 
+            //process all events
             foreach (IGrouping<DateTime, Event> events in eventsGroup)
             {
 
@@ -498,7 +477,7 @@ namespace CalendarServices.GoogleCalendar
                 var workDayEndTime = new DateTime(currentDay.Year, currentDay.Month, currentDay.Day) + workDays.FirstOrDefault(d => d.DayOfWeek == dayOfWeek).EndTime;
 
 
-                // check to see if an event spans entire work day, if it doesnt continue loop
+                // check to see if an event spans entire work day, if it does continue loop
                 var eventSpansWholeDay = events.FirstOrDefault(e => e.Start.DateTime <= workDayStartTime && e.End.DateTime >= workDayEndTime);
 
                 if (eventSpansWholeDay != null)
@@ -511,6 +490,7 @@ namespace CalendarServices.GoogleCalendar
                 var filteredEvents = events.Where(e => e.End.DateTime >= workDayStartTime && e.Start.DateTime < workDayEndTime);
                 var firstEventStart = filteredEvents.FirstOrDefault()?.Start.DateTime;
                 var firstEventEnd = filteredEvents.FirstOrDefault()?.End.DateTime;
+
 
                 // if the filtered events has none then the day is free
                 if (!filteredEvents.Any())
@@ -595,12 +575,7 @@ namespace CalendarServices.GoogleCalendar
 
                 while (eventStart < eventEnd)
                 {
-                    //var startSlot = freeTimeSlots.Where(s => s.Start.Value.ToShortDateString() == eventStart.ToShortDateString());
                     freeTimeSlots.RemoveAll(s => s.Start.Value.ToShortDateString() == eventStart.ToShortDateString());
-
-                    //var endSlot = freeTimeSlots.Where(s => s.End.Value.ToShortDateString() == eventEnd.AddDays(-1).ToShortDateString());
-                    //freeTimeSlots.RemoveAll(s => s.End.Value.ToShortDateString() == eventEnd.AddDays(-1).ToShortDateString());
-
                     eventStart = eventStart.AddDays(1);
                 }
 
