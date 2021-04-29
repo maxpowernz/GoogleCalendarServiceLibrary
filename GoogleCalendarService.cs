@@ -391,7 +391,6 @@ namespace CalendarServices.GoogleCalendar
 
             var firstDate = TimeZoneInfo.ConvertTime(timeMin, timeZone);
 
-
             var freeTimeSlots = new List<TimePeriod>(0);
 
             var request = new EventsResource.ListRequest(_calendarService, Options.CalendarId)
@@ -430,7 +429,7 @@ namespace CalendarServices.GoogleCalendar
                                           {
                                               DateTime = DateTime.Parse(d.End.Date)
                                           }
-                                      });
+                                      }).OrderBy(d => d.Start.DateTime);
 
 
             var allDayEventsStart = allDayEvents.FirstOrDefault()?.Start.DateTime.Value;
@@ -441,18 +440,24 @@ namespace CalendarServices.GoogleCalendar
 
 
             // get days that have no events, exclude all day events and add to list
-            // TESTED OK
+            // TESTED BAD
             while (timeMax > timeMin)
             {
 
                 // continue on all day events, reset time to 12am
-                var timeMin12Am = timeMin + new TimeSpan(0, 0, 0);
+                //var timeMin12Am = timeMin + new TimeSpan(0, 0, 0);
 
-                if (timeMin12Am >= allDayEventsStart && timeMin12Am <= allDayEventsEnd)
-                {
-                    timeMin = timeMin.AddDays(1);
-                    continue;
-                }
+                //if (allDayEvents.Any(e => e.Start.DateTime.Value <= timeMin12Am) && allDayEvents.Any(e => e.End.DateTime.Value >= timeMin12Am))
+                //{
+                //    timeMin = timeMin.AddDays(1);
+                //    continue;
+                //}
+
+                //if (timeMin12Am >= allDayEventsStart && timeMin12Am <= allDayEventsEnd)
+                //{
+                //    timeMin = timeMin.AddDays(1);
+                //    continue;
+                //}
 
                 // if day has no events then it is free
                 var dayHasEvents = eventsFlattened.Any(d => d.Start.DateTime.Value.ToShortDateString() == timeMin.ToShortDateString());
@@ -478,7 +483,6 @@ namespace CalendarServices.GoogleCalendar
 
                 timeMin = timeMin.AddDays(1);
             }
-
 
 
             foreach (IGrouping<DateTime, Event> events in eventsGroup)
@@ -580,6 +584,26 @@ namespace CalendarServices.GoogleCalendar
 
                     x++;
                 }
+            }
+
+            //remove all day events
+            foreach (var allDayEvent in allDayEvents)
+            {
+
+                var eventStart = allDayEvent.Start.DateTime.Value;
+                var eventEnd = allDayEvent.End.DateTime.Value;
+
+                while (eventStart < eventEnd)
+                {
+                    //var startSlot = freeTimeSlots.Where(s => s.Start.Value.ToShortDateString() == eventStart.ToShortDateString());
+                    freeTimeSlots.RemoveAll(s => s.Start.Value.ToShortDateString() == eventStart.ToShortDateString());
+
+                    //var endSlot = freeTimeSlots.Where(s => s.End.Value.ToShortDateString() == eventEnd.AddDays(-1).ToShortDateString());
+                    //freeTimeSlots.RemoveAll(s => s.End.Value.ToShortDateString() == eventEnd.AddDays(-1).ToShortDateString());
+
+                    eventStart = eventStart.AddDays(1);
+                }
+
             }
 
             return freeTimeSlots.OrderBy(d => d.Start).ToList();
